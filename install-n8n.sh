@@ -136,15 +136,15 @@ N8N_PASSWORD=$N8N_PASSWORD
 EOF
 
 ########################################
-# docker-compose.yml (compose v2)
+# docker-compose.yml (compose v2, фиксированные версии)
 ########################################
 
-cat > docker-compose.yml <<'EOF'
+cat > docker-compose.yml <<EOF
 version: "3.9"
 
 services:
   traefik:
-    image: traefik:latest
+    image: traefik:v3.0
     restart: always
     command:
       - --log.level=INFO
@@ -189,8 +189,8 @@ services:
       - ./redis-data:/data
     networks: [internal]
 
-  n8n:
-    image: n8nio/n8n:latest
+  n8n-main:
+    image: n8nio/n8n:2.263.0
     restart: always
     environment:
       EXECUTIONS_MODE: queue
@@ -216,11 +216,27 @@ services:
       - ./data:/home/node/.n8n
     labels:
       - traefik.enable=true
-      - traefik.http.routers.n8n.rule=Host(`${DOMAIN}`)
+      - traefik.http.routers.n8n.rule=Host(\`${DOMAIN}\`)
       - traefik.http.routers.n8n.entrypoints=websecure
       - traefik.http.routers.n8n.tls.certresolver=letsencrypt
       - traefik.http.services.n8n.loadbalancer.server.port=5678
     networks: [internal, traefik]
+
+  n8n-worker:
+    image: n8nio/n8n:2.263.0
+    command: worker --concurrency=5
+    restart: always
+    environment:
+      EXECUTIONS_MODE: queue
+      QUEUE_BULL_REDIS_HOST: redis
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: n8n
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./data:/home/node/.n8n
+    networks: [internal]
 
 networks:
   traefik:
