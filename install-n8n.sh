@@ -136,7 +136,7 @@ N8N_PASSWORD=$N8N_PASSWORD
 EOF
 
 ########################################
-# docker-compose.yml (compose v2, фиксированные версии)
+# docker-compose.yml (фиксированные версии)
 ########################################
 
 cat > docker-compose.yml <<EOF
@@ -160,7 +160,7 @@ services:
 
       - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
-      - --certificatesresolvers.letsencrypt.acme.email=${EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.email=\${EMAIL}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
     ports:
       - "80:80"
@@ -175,7 +175,7 @@ services:
     restart: always
     environment:
       POSTGRES_USER: n8n
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD}
       POSTGRES_DB: n8n
     volumes:
       - ./postgres-data:/var/lib/postgresql/data
@@ -190,7 +190,7 @@ services:
     networks: [internal]
 
   n8n-main:
-    image: n8nio/n8n:2.263.0
+    image: n8nio/n8n:2.262.1
     restart: always
     environment:
       EXECUTIONS_MODE: queue
@@ -200,15 +200,15 @@ services:
       DB_POSTGRESDB_HOST: postgres
       DB_POSTGRESDB_DATABASE: n8n
       DB_POSTGRESDB_USER: n8n
-      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_POSTGRESDB_PASSWORD: \${POSTGRES_PASSWORD}
 
-      N8N_HOST: ${DOMAIN}
+      N8N_HOST: \${DOMAIN}
       N8N_PROTOCOL: https
-      WEBHOOK_URL: https://${DOMAIN}/
+      WEBHOOK_URL: https://\${DOMAIN}/
 
       N8N_BASIC_AUTH_ACTIVE: "true"
       N8N_BASIC_AUTH_USER: admin
-      N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD}
+      N8N_BASIC_AUTH_PASSWORD: \${N8N_PASSWORD}
 
       GENERIC_TIMEZONE: Europe/Moscow
       NODE_ENV: production
@@ -216,14 +216,14 @@ services:
       - ./data:/home/node/.n8n
     labels:
       - traefik.enable=true
-      - traefik.http.routers.n8n.rule=Host(\`${DOMAIN}\`)
+      - traefik.http.routers.n8n.rule=Host(\`\${DOMAIN}\`)
       - traefik.http.routers.n8n.entrypoints=websecure
       - traefik.http.routers.n8n.tls.certresolver=letsencrypt
       - traefik.http.services.n8n.loadbalancer.server.port=5678
     networks: [internal, traefik]
 
   n8n-worker:
-    image: n8nio/n8n:2.263.0
+    image: n8nio/n8n:2.262.1
     command: worker --concurrency=5
     restart: always
     environment:
@@ -233,7 +233,7 @@ services:
       DB_POSTGRESDB_HOST: postgres
       DB_POSTGRESDB_DATABASE: n8n
       DB_POSTGRESDB_USER: n8n
-      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_POSTGRESDB_PASSWORD: \${POSTGRES_PASSWORD}
     volumes:
       - ./data:/home/node/.n8n
     networks: [internal]
@@ -249,7 +249,8 @@ EOF
 ########################################
 
 docker compose pull
-docker compose up -d
+docker compose down
+docker compose up -d --force-recreate
 
 echo
 echo "✅ n8n запущен"
