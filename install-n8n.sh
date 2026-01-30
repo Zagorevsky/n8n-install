@@ -1,10 +1,15 @@
 #!/bin/bash
 set -e
 
+# --- Проверка root ---
+if [ "$EUID" -ne 0 ]; then
+  echo "❌ Запусти скрипт через sudo или под root"
+  exit 1
+fi
+
 echo "=== n8n one-shot установка на новый VPS ==="
 
 # --- ВВОД ДОМЕНА И EMAIL ---
-
 read -p "Домен для n8n (например, bot.n-46.ru): " DOMAIN
 read -p "Email для Let's Encrypt (например, user@example.com): " EMAIL
 
@@ -17,38 +22,31 @@ echo "Домен: $DOMAIN"
 echo "Email:  $EMAIL"
 
 # --- ОБНОВЛЕНИЕ И УСТАНОВКА DOCKER ---
-
 apt update && apt upgrade -y
-apt install -y curl git ca-certificates
+apt install -y curl git ca-certificates gnupg lsb-release
 
-curl -fsSL https://get.docker.com | sh
+# Добавляем репозиторий Docker
+mkdir -p /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" > /etc/apt/sources.list.d/docker.list
+apt update
+apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
+# Проверка установки
 if ! command -v docker >/dev/null 2>&1; then
   echo "❌ Docker не установился"
   exit 1
 fi
-
 usermod -aG docker "$SUDO_USER" 2>/dev/null || true
-
-# docker-compose (отдельный бинарник)
-if ! command -v docker-compose >/dev/null 2>&1; then
-  curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" \
-    -o /usr/local/bin/docker-compose
-  chmod +x /usr/local/bin/docker-compose
-fi
 
 echo "✅ Docker и docker-compose установлены"
 
 # --- ПОДГОТОВКА КАТАЛОГА ---
-
 mkdir -p /opt/n8n/{data,postgres-data,redis-data,letsencrypt,backups}
 cd /opt/n8n
-
-# права для n8n (uid 1000 внутри контейнера)
 chown -R 1000:1000 data
 
 # --- ГЕНЕРАЦИЯ ПАРОЛЕЙ ---
-
 POSTGRES_PASSWORD=$(openssl rand -base64 32)
 N8N_PASSWORD=$(openssl rand -base64 24)
 
@@ -58,17 +56,14 @@ echo "N8N_PASSWORD (admin): $N8N_PASSWORD"
 echo "⚠️ СКОПИРУЙ их и сохрани!"
 
 # --- .env ---
-
 cat > .env << EOF
 DOMAIN=$DOMAIN
 POSTGRES_PASSWORD=$POSTGRES_PASSWORD
 N8N_PASSWORD=$N8N_PASSWORD
 EOF
-
 echo "✅ Файл .env создан"
 
 # --- docker-compose.yml ---
-
 cat > docker-compose.yml << EOF
 version: '3.8'
 
@@ -80,6 +75,8 @@ services:
       - "--api.dashboard=true"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.endpoint=unix:///var/run/docker.sock"
+      - "--providers.docker.watch=true"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       - "--certificatesresolvers.letsencrypt.acme.httpchallenge=true"
@@ -164,13 +161,14 @@ services:
       redis:
         condition: service_started
 EOF
-
 echo "✅ docker-compose.yml создан"
 
 # --- ЗАПУСК ---
-
 docker-compose down || true
 docker-compose up -d
+
+# Даем Traefik немного времени на регистрацию контейнеров
+sleep 5
 
 echo "✅ Контейнеры запущены"
 echo
