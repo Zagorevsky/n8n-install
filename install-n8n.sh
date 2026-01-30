@@ -144,7 +144,7 @@ version: "3.9"
 
 services:
   traefik:
-    image: traefik:v3.0
+    image: traefik:latest
     restart: always
     command:
       - --log.level=INFO
