@@ -190,7 +190,7 @@ services:
     networks: [internal]
 
   n8n-main:
-    image: n8nio/n8n:2.262.1
+    image: n8nio/n8n:latest
     restart: always
     environment:
       EXECUTIONS_MODE: queue
@@ -223,7 +223,7 @@ services:
     networks: [internal, traefik]
 
   n8n-worker:
-    image: n8nio/n8n:2.262.1
+    image: n8nio/n8n:latest
     command: worker --concurrency=5
     restart: always
     environment:
