@@ -117,7 +117,6 @@ chown -R 1000:1000 data
 touch /opt/n8n/letsencrypt/acme.json
 chmod 600 /opt/n8n/letsencrypt/acme.json
 
-
 ########################################
 # ПАРОЛИ
 ########################################
@@ -144,10 +143,10 @@ N8N_PASSWORD=$N8N_PASSWORD
 EOF
 
 ########################################
-# docker-compose.yml (фиксированные версии)
+# docker-compose.yml (n8nio/n8n:1.122.5, без воркеров)
 ########################################
 
-cat > docker-compose.yml <<EOF
+cat > docker-compose.yml <<'EOF'
 services:
   traefik:
     image: traefik:latest
@@ -193,27 +192,36 @@ services:
       - ./redis-data:/data
     networks: [internal]
 
-  n8n-main:
+  n8n:
     image: n8nio/n8n:1.122.5
     restart: always
     environment:
-      EXECUTIONS_MODE: regular           # только main, без очереди
+      # РЕЖИМ БЕЗ ВОРКЕРОВ - только main процесс
+      EXECUTIONS_MODE: regular
+      EXECUTIONS_PROCESS: main
+      
+      # База данных
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
       DB_POSTGRESDB_DATABASE: n8n
       DB_POSTGRESDB_USER: n8n
       DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
-
+      
+      # Настройки хоста
       N8N_HOST: ${DOMAIN}
       N8N_PROTOCOL: https
       WEBHOOK_URL: https://${DOMAIN}/
-
+      
+      # Базовая авторизация
       N8N_BASIC_AUTH_ACTIVE: "true"
       N8N_BASIC_AUTH_USER: admin
       N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD}
-
+      
+      # Дополнительные настройки
       GENERIC_TIMEZONE: Europe/Moscow
       NODE_ENV: production
+      N8N_METRICS: "false"
+      
     volumes:
       - ./data:/home/node/.n8n
     labels:
@@ -223,6 +231,9 @@ services:
       - traefik.http.routers.n8n.tls.certresolver=letsencrypt
       - traefik.http.services.n8n.loadbalancer.server.port=5678
     networks: [internal, traefik]
+    depends_on:
+      - postgres
+      - redis
 
 networks:
   traefik:
@@ -235,12 +246,13 @@ EOF
 ########################################
 
 docker compose pull
-docker compose down
+docker compose down || true
 docker compose up -d --force-recreate
 
 echo
-echo "✅ n8n запущен"
+echo "✅ n8n [1.122.5] запущен БЕЗ ВОРКЕРОВ"
 echo "🌐 https://$DOMAIN"
-echo "👤 admin"
-echo "🔑 $N8N_PASSWORD"
+echo "👤 admin / $N8N_PASSWORD"
+echo "📦 Только main процесс (EXECUTIONS_MODE: regular)"
 echo
+echo "🔍 Логи: docker compose logs -f n8n"
