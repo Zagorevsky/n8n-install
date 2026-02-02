@@ -148,8 +148,6 @@ EOF
 ########################################
 
 cat > docker-compose.yml <<EOF
-version: "3.9"
-
 services:
   traefik:
     image: traefik:latest
@@ -160,15 +158,13 @@ services:
       - --providers.docker.exposedbydefault=false
       - --providers.docker.watch=true
       - --providers.docker.endpoint=unix:///var/run/docker.sock
-
       - --entrypoints.web.address=:80
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
       - --entrypoints.web.http.redirections.entrypoint.scheme=https
       - --entrypoints.websecure.address=:443
-
       - --certificatesresolvers.letsencrypt.acme.httpchallenge=true
       - --certificatesresolvers.letsencrypt.acme.httpchallenge.entrypoint=web
-      - --certificatesresolvers.letsencrypt.acme.email=\${EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.email=${EMAIL}
       - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
     ports:
       - "80:80"
@@ -183,7 +179,7 @@ services:
     restart: always
     environment:
       POSTGRES_USER: n8n
-      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: n8n
     volumes:
       - ./postgres-data:/var/lib/postgresql/data
@@ -198,25 +194,23 @@ services:
     networks: [internal]
 
   n8n-main:
-    image: n8nio/n8n:latest
+    image: n8nio/n8n:1.122.5
     restart: always
     environment:
-      EXECUTIONS_MODE: queue
-      QUEUE_BULL_REDIS_HOST: redis
-
+      EXECUTIONS_MODE: regular           # только main, без очереди
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
       DB_POSTGRESDB_DATABASE: n8n
       DB_POSTGRESDB_USER: n8n
-      DB_POSTGRESDB_PASSWORD: \${POSTGRES_PASSWORD}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
 
-      N8N_HOST: \${DOMAIN}
+      N8N_HOST: ${DOMAIN}
       N8N_PROTOCOL: https
-      WEBHOOK_URL: https://\${DOMAIN}/
+      WEBHOOK_URL: https://${DOMAIN}/
 
       N8N_BASIC_AUTH_ACTIVE: "true"
       N8N_BASIC_AUTH_USER: admin
-      N8N_BASIC_AUTH_PASSWORD: \${N8N_PASSWORD}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD}
 
       GENERIC_TIMEZONE: Europe/Moscow
       NODE_ENV: production
@@ -224,27 +218,11 @@ services:
       - ./data:/home/node/.n8n
     labels:
       - traefik.enable=true
-      - traefik.http.routers.n8n.rule=Host(\`\${DOMAIN}\`)
+      - traefik.http.routers.n8n.rule=Host(`${DOMAIN}`)
       - traefik.http.routers.n8n.entrypoints=websecure
       - traefik.http.routers.n8n.tls.certresolver=letsencrypt
       - traefik.http.services.n8n.loadbalancer.server.port=5678
     networks: [internal, traefik]
-
-  n8n-worker:
-    image: n8nio/n8n:latest
-    command: worker --concurrency=5
-    restart: always
-    environment:
-      EXECUTIONS_MODE: queue
-      QUEUE_BULL_REDIS_HOST: redis
-      DB_TYPE: postgresdb
-      DB_POSTGRESDB_HOST: postgres
-      DB_POSTGRESDB_DATABASE: n8n
-      DB_POSTGRESDB_USER: n8n
-      DB_POSTGRESDB_PASSWORD: \${POSTGRES_PASSWORD}
-    volumes:
-      - ./data:/home/node/.n8n
-    networks: [internal]
 
 networks:
   traefik:
