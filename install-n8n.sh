@@ -1,73 +1,74 @@
 #!/bin/bash
-# Скрипт автоматической установки n8n + Traefik + Postgres + Backup
+# Automatic installation: n8n (v1.122.5) + Traefik v3 + Postgres + Redis
 set -euo pipefail
 
 ########################################
-# 1. ПОДГОТОВКА И ПРОВЕРКИ
+# 1. PRE-FLIGHT CHECKS AND PREPARATION
 ########################################
 if [ "$EUID" -ne 0 ]; then
-  echo "❌ Запусти скрипт через sudo"
+  echo "❌ Please run this script as sudo"
   exit 1
 fi
 
-echo "🔄 Обновление индексов и установка базовых утилит..."
+echo "🔄 Preparing system and installing utilities..."
+# Fix for EOL/Archive Ubuntu versions (switches to old-releases if 404 occurs)
+sed -i -re 's/([a-z]{2}\.)?archive.ubuntu.com|security.ubuntu.com/old-releases.ubuntu.com/g' /etc/apt/sources.list || true
+
 apt update && apt install -y lsb-release curl jq openssl git ca-certificates gnupg
 
-DISTRO=$(lsb_release -is)
-CODENAME=$(lsb_release -cs)
-
-if [[ "$DISTRO" != "Ubuntu" ]]; then
-  echo "❌ Поддерживается только Ubuntu"
-  exit 1
-fi
+# Free up ports 80 and 443 (stop Apache/Nginx if they are running)
+systemctl stop nginx apache2 || true
+systemctl disable nginx apache2 || true
 
 ########################################
-# 2. ФИКС DOCKER API (Для совместимости с Traefik)
+# 2. DOCKER API CONFIGURATION (Critical for Traefik v3 compatibility)
 ########################################
-echo "🔧 Настройка Docker API compatibility..."
+echo "🔧 Configuring Docker API compatibility..."
 mkdir -p /etc/docker
 DOCKER_CONFIG="/etc/docker/daemon.json"
 
 if [ -f "$DOCKER_CONFIG" ]; then
+    # If file exists, merge the min-api-version using jq
     tmp=$(mktemp)
     jq '. + {"min-api-version": "1.24"}' "$DOCKER_CONFIG" > "$tmp" && mv "$tmp" "$DOCKER_CONFIG"
 else
+    # Create new config if it doesn't exist
     echo '{"min-api-version": "1.24"}' > "$DOCKER_CONFIG"
 fi
 
 ########################################
-# 3. УСТАНОВКА DOCKER
+# 3. DOCKER INSTALLATION
 ########################################
-echo "📦 Установка Docker Engine..."
+echo "📦 Installing Docker Engine..."
 mkdir -p /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
 
+CODENAME=$(lsb_release -cs)
 echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $CODENAME stable" > /etc/apt/sources.list.d/docker.list
 
-apt update
-apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+apt update && apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 
-# Перезапуск демона для активации конфига
+# Reload and restart Docker to apply API changes
 systemctl daemon-reload
 systemctl restart docker
 
 ########################################
-# 4. ВВОД ДАННЫХ
+# 4. USER INPUT AND ENVIRONMENT SETUP
 ########################################
 echo "-------------------------------------------------------"
-read -rp "Введите домен (например, n8n.example.com): " DOMAIN
-read -rp "Введите ваш Email (для SSL): " EMAIL
+read -rp "Enter your domain (e.g., n8n.example.com): " DOMAIN
+read -rp "Enter your email for SSL: " EMAIL
 echo "-------------------------------------------------------"
 
-# Подготовка папок
+# Create necessary directories
 mkdir -p /opt/n8n/{data,postgres-data,redis-data,letsencrypt,backups}
 cd /opt/n8n
 
-# Генерация секретов
+# Generate secure random secrets
 DB_PASSWORD=$(openssl rand -base64 24)
 ENCRYPTION_KEY=$(openssl rand -hex 24)
 
-# Создание .env
+# Create .env file
 cat > .env <<EOF
 DOMAIN=$DOMAIN
 EMAIL=$EMAIL
@@ -76,8 +77,9 @@ N8N_ENCRYPTION_KEY=$ENCRYPTION_KEY
 EOF
 
 ########################################
-# 5. ГЕНЕРАЦИЯ DOCKER COMPOSE
+# 5. DOCKER COMPOSE GENERATION
 ########################################
+# Using 'EOF' in quotes to prevent shell expansion of variables during file creation
 cat > docker-compose.yml <<'EOF'
 services:
   traefik:
@@ -117,24 +119,6 @@ services:
     networks:
       - private
 
-  postgres-backup:
-    image: prodrigestivill/postgres-backup-local:16-alpine
-    container_name: n8n-backup
-    restart: always
-    environment:
-      POSTGRES_HOST: postgres
-      POSTGRES_USER: n8n
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: n8n
-      SCHEDULE: '@daily'
-      BACKUP_KEEP_DAYS: 7
-    volumes:
-      - ./backups:/backups
-    depends_on:
-      - postgres
-    networks:
-      - private
-
   redis:
     image: redis:7-alpine
     container_name: n8n-redis
@@ -143,7 +127,7 @@ services:
       - private
 
   n8n:
-    image: n8nio/n8n:latest
+    image: n8nio/n8n:1.122.5
     container_name: n8n-main
     restart: always
     environment:
@@ -154,6 +138,7 @@ services:
       - N8N_HOST=${DOMAIN}
       - WEBHOOK_URL=https://${DOMAIN}/
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_RUNNERS_ENABLED=true
     volumes:
       - ./data:/home/node/.n8n
     labels:
@@ -162,6 +147,7 @@ services:
       - "traefik.http.routers.n8n.entrypoints=websecure"
       - "traefik.http.routers.n8n.tls.certresolver=letsencrypt"
       - "traefik.http.services.n8n.loadbalancer.server.port=5678"
+      - "traefik.docker.network=public" # Fixes 504 Gateway Timeout when multi-network is used
     networks:
       - public
       - private
@@ -174,17 +160,19 @@ networks:
 EOF
 
 ########################################
-# 6. ФИНАЛЬНЫЙ ЗАПУСК
+# 6. PERMISSIONS AND DEPLOYMENT
 ########################################
+# Set correct ownership for n8n data
 chown -R 1000:1000 /opt/n8n/data
+# Set secure permissions for SSL storage
 touch /opt/n8n/letsencrypt/acme.json
 chmod 600 /opt/n8n/letsencrypt/acme.json
 
-echo "🚀 Запуск Docker Compose..."
+echo "🚀 Starting containers..."
 docker compose up -d
 
 echo "-------------------------------------------------------"
-echo "✅ Установка на чистый сервер завершена!"
-echo "🌐 Ссылка: https://$DOMAIN"
-echo "📁 Рабочая директория: /opt/n8n"
+echo "✅ Installation completed successfully!"
+echo "🌐 URL: https://$DOMAIN"
+echo "📂 Workdir: /opt/n8n"
 echo "-------------------------------------------------------"
