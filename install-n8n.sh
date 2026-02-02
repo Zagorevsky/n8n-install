@@ -196,40 +196,28 @@ services:
     image: n8nio/n8n:1.122.5
     restart: always
     environment:
-      # РЕЖИМ БЕЗ ВОРКЕРОВ - только main процесс
       EXECUTIONS_MODE: regular
-      EXECUTIONS_PROCESS: main
-      
-      # База данных
       DB_TYPE: postgresdb
       DB_POSTGRESDB_HOST: postgres
       DB_POSTGRESDB_DATABASE: n8n
       DB_POSTGRESDB_USER: n8n
       DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
-      
-      # Настройки хоста
       N8N_HOST: ${DOMAIN}
       N8N_PROTOCOL: https
       WEBHOOK_URL: https://${DOMAIN}/
-      
-      # Базовая авторизация
       N8N_BASIC_AUTH_ACTIVE: "true"
       N8N_BASIC_AUTH_USER: admin
       N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD}
-      
-      # Дополнительные настройки
       GENERIC_TIMEZONE: Europe/Moscow
       NODE_ENV: production
-      N8N_METRICS: "false"
-      
     volumes:
       - ./data:/home/node/.n8n
     labels:
-      - traefik.enable=true
-      - traefik.http.routers.n8n.rule=Host(`${DOMAIN}`)
-      - traefik.http.routers.n8n.entrypoints=websecure
-      - traefik.http.routers.n8n.tls.certresolver=letsencrypt
-      - traefik.http.services.n8n.loadbalancer.server.port=5678
+      - "traefik.enable=true"
+      - "traefik.http.routers.n8n.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.n8n.entrypoints=websecure"
+      - "traefik.http.routers.n8n.tls.certresolver=letsencrypt"
+      - "traefik.http.services.n8n.loadbalancer.server.port=5678"
     networks: [internal, traefik]
     depends_on:
       - postgres
@@ -240,6 +228,7 @@ networks:
   internal:
     internal: true
 EOF
+
 
 ########################################
 # ЗАПУСК
