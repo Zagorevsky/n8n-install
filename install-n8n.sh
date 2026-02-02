@@ -1,21 +1,19 @@
 #!/bin/bash
+# Скрипт автоматической установки n8n + Traefik + Postgres + Backup
 set -euo pipefail
 
 ########################################
-# 1. ПРОВЕРКИ СИСТЕМЫ
+# 1. ПОДГОТОВКА И ПРОВЕРКИ
 ########################################
-
 if [ "$EUID" -ne 0 ]; then
   echo "❌ Запусти скрипт через sudo"
   exit 1
 fi
 
-if ! command -v lsb_release >/dev/null 2>&1; then
-  apt update && apt install -y lsb-release
-fi
+echo "🔄 Обновление индексов и установка базовых утилит..."
+apt update && apt install -y lsb-release curl jq openssl git ca-certificates gnupg
 
 DISTRO=$(lsb_release -is)
-VERSION=$(lsb_release -rs)
 CODENAME=$(lsb_release -cs)
 
 if [[ "$DISTRO" != "Ubuntu" ]]; then
@@ -23,31 +21,24 @@ if [[ "$DISTRO" != "Ubuntu" ]]; then
   exit 1
 fi
 
-case "$VERSION" in
-  20.04|22.04|24.04) ;;
-  *) echo "❌ Требуется Ubuntu 20.04+"; exit 1 ;;
-esac
-
 ########################################
-# 2. ВВОД ДАННЫХ
+# 2. ФИКС DOCKER API (Для совместимости с Traefik)
 ########################################
+echo "🔧 Настройка Docker API compatibility..."
+mkdir -p /etc/docker
+DOCKER_CONFIG="/etc/docker/daemon.json"
 
-echo "=== Настройка n8n с авто-бэкапами ==="
-read -rp "Домен (например, n8n.example.com): " DOMAIN
-read -rp "Email для SSL (Let's Encrypt): " EMAIL
-
-if [[ -z "$DOMAIN" || -z "$EMAIL" ]]; then
-  echo "❌ Домен и Email обязательны"
-  exit 1
+if [ -f "$DOCKER_CONFIG" ]; then
+    tmp=$(mktemp)
+    jq '. + {"min-api-version": "1.24"}' "$DOCKER_CONFIG" > "$tmp" && mv "$tmp" "$DOCKER_CONFIG"
+else
+    echo '{"min-api-version": "1.24"}' > "$DOCKER_CONFIG"
 fi
 
 ########################################
 # 3. УСТАНОВКА DOCKER
 ########################################
-
-apt update && apt upgrade -y
-apt install -y ca-certificates curl gnupg git openssl
-
+echo "📦 Установка Docker Engine..."
 mkdir -p /etc/apt/keyrings
 curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg --yes
 
@@ -56,20 +47,27 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.
 apt update
 apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 
-########################################
-# 4. ПОДГОТОВКА ОКРУЖЕНИЯ
-########################################
+# Перезапуск демона для активации конфига
+systemctl daemon-reload
+systemctl restart docker
 
+########################################
+# 4. ВВОД ДАННЫХ
+########################################
+echo "-------------------------------------------------------"
+read -rp "Введите домен (например, n8n.example.com): " DOMAIN
+read -rp "Введите ваш Email (для SSL): " EMAIL
+echo "-------------------------------------------------------"
+
+# Подготовка папок
 mkdir -p /opt/n8n/{data,postgres-data,redis-data,letsencrypt,backups}
 cd /opt/n8n
 
-chown -R 1000:1000 /opt/n8n/data
-touch /opt/n8n/letsencrypt/acme.json
-chmod 600 /opt/n8n/letsencrypt/acme.json
-
+# Генерация секретов
 DB_PASSWORD=$(openssl rand -base64 24)
 ENCRYPTION_KEY=$(openssl rand -hex 24)
 
+# Создание .env
 cat > .env <<EOF
 DOMAIN=$DOMAIN
 EMAIL=$EMAIL
@@ -80,12 +78,13 @@ EOF
 ########################################
 # 5. ГЕНЕРАЦИЯ DOCKER COMPOSE
 ########################################
-
 cat > docker-compose.yml <<'EOF'
 services:
   traefik:
     image: traefik:v3.0
+    container_name: n8n-traefik
     restart: always
+    user: root
     command:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
@@ -107,6 +106,7 @@ services:
 
   postgres:
     image: postgres:16-alpine
+    container_name: n8n-postgres
     restart: always
     environment:
       POSTGRES_USER: n8n
@@ -117,19 +117,17 @@ services:
     networks:
       - private
 
-  # Контейнер для бэкапов (запускается раз в сутки)
   postgres-backup:
     image: prodrigestivill/postgres-backup-local:16-alpine
+    container_name: n8n-backup
     restart: always
     environment:
       POSTGRES_HOST: postgres
-      POSTGRES_CLUSTER: 'FALSE'
       POSTGRES_USER: n8n
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: n8n
       SCHEDULE: '@daily'
       BACKUP_KEEP_DAYS: 7
-      BACKUP_SUFFIX: .sql.gz
     volumes:
       - ./backups:/backups
     depends_on:
@@ -139,12 +137,14 @@ services:
 
   redis:
     image: redis:7-alpine
+    container_name: n8n-redis
     restart: always
     networks:
       - private
 
   n8n:
     image: n8nio/n8n:latest
+    container_name: n8n-main
     restart: always
     environment:
       - DB_TYPE=postgresdb
@@ -174,15 +174,17 @@ networks:
 EOF
 
 ########################################
-# 6. ЗАПУСК
+# 6. ФИНАЛЬНЫЙ ЗАПУСК
 ########################################
+chown -R 1000:1000 /opt/n8n/data
+touch /opt/n8n/letsencrypt/acme.json
+chmod 600 /opt/n8n/letsencrypt/acme.json
 
-echo "🚀 Запуск всех служб..."
-docker compose pull
+echo "🚀 Запуск Docker Compose..."
 docker compose up -d
 
 echo "-------------------------------------------------------"
-echo "✅ Готово!"
-echo "🌐 URL: https://$DOMAIN"
-echo "📂 Бэкапы БД здесь: /opt/n8n/backups"
+echo "✅ Установка на чистый сервер завершена!"
+echo "🌐 Ссылка: https://$DOMAIN"
+echo "📁 Рабочая директория: /opt/n8n"
 echo "-------------------------------------------------------"
